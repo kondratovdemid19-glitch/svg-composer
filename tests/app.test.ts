@@ -200,3 +200,10 @@ describe("project portability and validation", () => {
     await expect(validateProject(source)).rejects.toThrow();
   });
 });
+
+describe('review: unsafe imported layer IDs',()=>{
+ const malicious=async():Promise<Project>=>{const asset=await readAsset(wallet,'wallet.svg');return {version:1,assets:[asset],scene:{width:400,height:400,title:'unsafe',colorMap:{},layers:[{id:'"><img src="x" onerror="alert(1)">',assetId:asset.id,x:200,y:200,scale:1,rotation:0,visible:true,locked:false}]}};};
+ it('rejects unsafe IDs during project validation',async()=>{await expect(validateProject(await malicious())).rejects.toThrow();});
+ it('opens a malicious project without inserting injected markup or handlers',async()=>{const editor=mount(root,{restore:false});const input=root.querySelector<HTMLInputElement>('#project-file')!;Object.defineProperty(input,'files',{value:[file(JSON.stringify(await malicious()),'unsafe.json')]});input.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.querySelector('#message')?.textContent).not.toContain('Проверяю'));expect(root.querySelector('img[src="x"],[onerror]')).toBeNull();expect(editor.getProject().scene.layers).toHaveLength(0);expect(root.querySelector('#message')?.textContent).not.toContain('Проект открыт.');});
+ it('rejects unsafe IDs on autosave restoration without creating injected nodes',async()=>{const {loadProject}=await import('../src/storage');vi.mocked(loadProject).mockResolvedValueOnce(await malicious());const editor=mount(root);await vi.waitFor(()=>expect(root.querySelector('#save-status')?.textContent).toContain('Автосохранение недоступно'));expect(root.querySelector('img[src="x"],[onerror]')).toBeNull();expect(editor.getProject().scene.layers).toHaveLength(0);});
+});

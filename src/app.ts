@@ -94,6 +94,8 @@ export async function validateProject(value: unknown): Promise<Project> {
   scene.layers = scene.layers.map((layer: Layer) => {
     if (
       !layer ||
+      typeof layer.id !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(layer.id) ||
       typeof layer.visible !== "boolean" ||
       typeof layer.locked !== "boolean"
     )
@@ -309,7 +311,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
           .reverse()
           .map(
             (l) =>
-              `<div class="layer-row ${l.id === selectedId ? "selected" : ""}"><button class="layer-pick" data-select="${l.id}" aria-pressed="${l.id === selectedId}"><span class="layer-glyph" aria-hidden="true">▧</span><span>${escape(assetById(l.assetId)?.name || "Объект")}</span></button><button class="layer-icon" data-visible="${l.id}" aria-label="${l.visible ? "Скрыть" : "Показать"} ${escape(assetById(l.assetId)?.name || "объект")}" aria-pressed="${l.visible}">${l.visible ? "◉" : "○"}</button><button class="layer-icon" data-lock="${l.id}" aria-label="${l.locked ? "Разблокировать" : "Заблокировать"} ${escape(assetById(l.assetId)?.name || "объект")}" aria-pressed="${l.locked}">${l.locked ? "▣" : "▫"}</button></div>`,
+              `<div class="layer-row ${l.id === selectedId ? "selected" : ""}"><button class="layer-pick" data-select="${escape(l.id)}" aria-pressed="${l.id === selectedId}"><span class="layer-glyph" aria-hidden="true">▧</span><span>${escape(assetById(l.assetId)?.name || "Объект")}</span></button><button class="layer-icon" data-visible="${escape(l.id)}" aria-label="${l.visible ? "Скрыть" : "Показать"} ${escape(assetById(l.assetId)?.name || "объект")}" aria-pressed="${l.visible}">${l.visible ? "◉" : "○"}</button><button class="layer-icon" data-lock="${escape(l.id)}" aria-label="${l.locked ? "Разблокировать" : "Заблокировать"} ${escape(assetById(l.assetId)?.name || "объект")}" aria-pressed="${l.locked}">${l.locked ? "▣" : "▫"}</button></div>`,
           )
           .join("")
       : '<p class="small-copy layer-empty">Объекты появятся здесь<br>после добавления на холст.</p>';

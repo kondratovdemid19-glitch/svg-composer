@@ -338,3 +338,24 @@ describe("review regressions", () => {
     ).toBe("2");
   });
 });
+
+describe('review: recoloring preserves visibility', () => {
+ const sceneFor = (a: Awaited<ReturnType<typeof readAsset>>, colorMap: Record<string,string>): Scene => ({width:400,height:400,title:'',colorMap,layers:[{id:'safe-layer',assetId:a.id,x:200,y:200,scale:1,rotation:0,visible:true,locked:false}]});
+ it('keeps mask and filter control paints, including inherited and referenced colors, while recoloring artwork gradients', async()=>{
+  const a=await readAsset('<svg viewBox="0 0 30 30" fill="#ffffff" color="#ffffff"><defs><linearGradient id="art"><stop stop-color="#ff0000"/></linearGradient><linearGradient id="maskGradient"><stop stop-color="currentColor"/></linearGradient><mask id="mask"><rect width="30" height="30"/><rect width="20" height="20" fill="#ffffff"/><rect width="15" height="15" fill="url(#maskGradient)"/></mask><filter id="filter"><feFlood flood-color="#ffffff"/></filter></defs><path d="M0 0L20 20" fill="url(#art)" mask="url(#mask)"/></svg>','mask.svg');
+  expect(a.colors).not.toContain('#ffffff');
+  const out=parse(composeSvg(sceneFor(a,{'#ffffff':'#000000','#ff0000':'#00ff00'}),[a]));
+  const effective=(el:Element,key:string):string|null=>el.getAttribute(key)??(el.parentElement?effective(el.parentElement,key):null);
+  expect(effective(out.querySelector('mask rect')!,'fill')).toBe('#ffffff');
+  expect(out.querySelector('mask rect[fill="#ffffff"]')).not.toBeNull();
+  expect(effective(out.querySelector('[id="layer0-maskGradient"] stop')!,'color')).toBe('#ffffff');
+  expect(out.querySelector('feFlood')?.getAttribute('flood-color')).toBe('#ffffff');
+  expect(out.querySelector('[id="layer0-art"] stop')?.getAttribute('stop-color')).toBe('#00ff00');
+ });
+ it.each([0,0.5])('retains source rgba alpha %s through map and direct export',async alpha=>{
+  const original=`rgba(255,0,0,${alpha})`;const mapped=recolorMap([original],['#00ff00','#0000ff']);expect(mapped[original]).toBe(`rgba(0,255,0,${alpha})`);
+  const a=await readAsset(`<svg viewBox="0 0 10 10"><path d="M0 0L4 4" fill="${original}" stroke="${original}"/></svg>`,'rgba.svg');
+  for(const map of [mapped,{[original]:'#00ff00'}]){const path=parse(composeSvg(sceneFor(a,map),[a])).querySelector('path')!;expect(path.getAttribute('fill')).toBe(`rgba(0,255,0,${alpha})`);expect(path.getAttribute('stroke')).toBe(`rgba(0,255,0,${alpha})`);}
+ });
+ it('rejects unsafe layer identifiers at the core boundary',async()=>{const a=await readAsset('<svg viewBox="0 0 10 10"/>','x');const scene=sceneFor(a,{});scene.layers[0].id='"><img src="x" onerror="alert(1)">';expect(()=>composeSvg(scene,[a])).toThrow();});
+});

@@ -28,6 +28,44 @@ const colorAttrs = new Set([
   "lighting-color",
 ]);
 const internalURL = /^url\(\s*(['"]?)#([A-Za-z_][\w.:-]*)\1\s*\)$/;
+
+// Control definitions and anything they reference must retain luminance and
+// inherited paint context. Shared references are conservatively protected too.
+function protectedPaint(root: Element): Set<Element> {
+  const all = [root, ...Array.from(root.querySelectorAll("*"))];
+  const byId = new Map(all.filter(el => el.hasAttribute("id")).map(el => [el.getAttribute("id")!, el]));
+  const protectedElements = new Set<Element>();
+  const queue = all.filter(el => ["mask", "filter", "clipPath"].includes(el.localName));
+  for (let index = 0; index < queue.length; index++) {
+    const el = queue[index];
+    if (protectedElements.has(el)) continue;
+    protectedElements.add(el);
+    queue.push(...Array.from(el.children));
+    for (const attr of Array.from(el.attributes)) {
+      const reference = attr.localName === "href" ? attr.value.slice(1) : attr.value.match(internalURL)?.[2];
+      const target = reference && byId.get(reference);
+      if (target) queue.push(target);
+    }
+  }
+  // Freezing ancestor attributes retains inherited currentColor/fill without
+  // materializing paint onto <use> targets, which would change shadow inheritance.
+  for (const el of [...protectedElements]) {
+    let parent = el.parentElement;
+    while (parent) { protectedElements.add(parent); parent = parent.parentElement; }
+  }
+  return protectedElements;
+}
+function withSourceAlpha(source: string, replacement: string): string {
+  const original = normalizeColor(source)!;
+  const target = normalizeColor(replacement)!;
+  const alpha = original.match(/^rgba\([^,]+,[^,]+,[^,]+,([^)]*)\)$/)?.[1];
+  if (alpha === undefined) return target;
+  const channels = target.startsWith("#")
+    ? [1, 3, 5].map(pos => parseInt(target.slice(pos, pos + 2), 16))
+    : target.slice(5, -1).split(",").slice(0, 3).map(Number);
+  return `rgba(${channels.join(",")},${alpha})`;
+}
+
 function normalizeColor(value: string): string | null {
   const v = value.trim().toLowerCase();
   if (/^#[\da-f]{3}$/.test(v))
@@ -173,7 +211,7 @@ function inspectUnchecked(svgText: string): {
         const c = normalizeColor(val);
         if (c) {
           el.setAttribute(attr.name, c);
-          colors.add(c);
+
         } else if (
           ![
             "none",
@@ -186,6 +224,13 @@ function inspectUnchecked(svgText: string): {
         )
           fail(`Цвет «${val}» не поддерживается. Используйте HEX или RGB.`);
       }
+    }
+  }
+  const controls = protectedPaint(root);
+  for (const el of [root, ...nodes]) if (!controls.has(el)) {
+    for (const attr of Array.from(el.attributes)) if (colorAttrs.has(attr.localName)) {
+      const color = normalizeColor(attr.value);
+      if (color) colors.add(color);
     }
   }
   let width = dimension(root.getAttribute("width"));
@@ -478,7 +523,7 @@ export function recolorMap(
     const dark =
       /^#[\da-f]{6}$/.test(c) &&
       [1, 3, 5].every((pos) => parseInt(c.slice(pos, pos + 2), 16) <= 48);
-    result[original] = dark ? c : colors[i++ % colors.length];
+    result[original] = dark ? c : withSourceAlpha(c, colors[i++ % colors.length]);
   }
   return result;
 }
@@ -502,7 +547,7 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
   }
   const seen = new Set<string>();
   for (const [index, layer] of scene.layers.entries()) {
-    if (typeof layer.id !== "string" || !layer.id || seen.has(layer.id))
+    if (typeof layer.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(layer.id) || seen.has(layer.id))
       fail("Слои должны иметь уникальные имена.");
     seen.add(layer.id);
     if (
@@ -530,6 +575,7 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
     const nested = doc.importNode(info.root, true);
     const prefix = `layer${index}-`;
     const all = [nested, ...Array.from(nested.querySelectorAll("*"))];
+    const controls = protectedPaint(nested);
     for (const el of all)
       for (const attr of Array.from(el.attributes)) {
         if (attr.localName === "id")
@@ -545,9 +591,9 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
             attr.name,
             attr.value.replace(internalURL, `url(#${prefix}$2)`),
           );
-        else if (colorAttrs.has(attr.localName)) {
+        else if (colorAttrs.has(attr.localName) && !controls.has(el)) {
           const replacement = mapping.get(normalizeColor(attr.value) ?? "");
-          if (replacement) el.setAttribute(attr.name, replacement);
+          if (replacement) el.setAttribute(attr.name, withSourceAlpha(attr.value, replacement));
         }
       }
     nested.setAttribute("x", String(-asset.width / 2));
