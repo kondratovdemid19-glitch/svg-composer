@@ -16,3 +16,11 @@ Tasks:
 2. Workspace: upload library/project/palette, editable stage and transformations, keyboard/drag/layers, autosave, import/export and error/empty states.
 3. Obtain original assets through permitted UI or archive, generate and inspect three examples; don't substitute fabricated employer illustrations.
 4. Independent code/spec review, fix substantive findings; build/tests and browser QA; publish generic code/demo, private handover artifacts, then review HH messages and suitable applications.
+
+## Binding library-introduction requirements
+
+Source components have S/L detail variants and main/background roles. Detail is independent of canvas dimensions. Editable family/detail/role metadata is optionally parsed from `Family--S--main.svg`; normal source names default to L/main (or current detail on fresh UI import). A scene switch requires exactly one counterpart by normalized family, role and target detail for every layer. It uniformly fits each new source into the old bounding box, keeping position, rotation, visibility, order and locks. Missing/ambiguous counterparts cancel the whole change. No fake detail or new geometry is generated. The complete-library metadata selector also exposes inactive-detail sources.
+
+Three extendable presets each have background and object palette groups. Main assets can use their union; backgrounds can only use the background group. Source dark outlines, alpha and structural mask/filter paints remain protected. Applied palette groups persist in scene state; export derives role-specific maps. Flat TXT/JSON arrays contain 2–8 object HEX colors and set neutral background `#e4e9f1`. Grouped JSON `{background:[HEX...],objects:[HEX...]}` permits 1–8 unique colors per group. Legacy colorMap only applies to main assets. Metadata/palettes never modify original source bytes, hashes or geometry.
+
+The implementation does not establish compatibility with unavailable employer originals. Actual counterpart names/roles, three employer-source compositions and source-based visual verification remain pending.

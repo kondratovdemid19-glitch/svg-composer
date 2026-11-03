@@ -1,5 +1,11 @@
+export type Detail = "S" | "L";
+export type AssetRole = "main" | "background";
+export interface PaletteGroups { background: string[]; objects: string[]; }
 export interface Asset {
   id: string;
+  family: string;
+  detail: Detail;
+  role: AssetRole;
   name: string;
   tags: string[];
   width: number;
@@ -21,6 +27,8 @@ export interface Layer {
   locked: boolean;
 }
 export interface Scene {
+  detail?: Detail;
+  palette?: PaletteGroups;
   width: number;
   height: number;
   title: string;

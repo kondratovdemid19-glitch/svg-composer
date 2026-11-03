@@ -186,7 +186,7 @@ describe("project portability and validation", () => {
   it("validates source bytes again and preserves the original artwork across save/open", async () => {
     const source = await project();
     const restored = await validateProject(JSON.parse(JSON.stringify(source)));
-    expect(restored).toEqual(source);
+    expect(restored).toEqual({...source,scene:{...source.scene,detail:"L"}});
   });
   it("rejects unsafe original bytes even when cached preview is clean", async () => {
     const source = await project();
@@ -227,4 +227,36 @@ describe("built-in headline examples", () => {
     expect(root.querySelectorAll("#stage path")).toHaveLength(1);
     expect(root.querySelectorAll("#stage circle")).toHaveLength(1);
   });
+});
+
+
+describe('detail and grouped palettes UI',()=>{
+ it('switches actual S/L counterparts, filters library, and cancels missing detail',async()=>{const editor=mount(root,{restore:false});await editor.importSVG([file(wallet,'Wallet--L--main.svg'),file(lamp,'Wallet--S--main.svg')]);root.querySelector<HTMLButtonElement>('[data-add]')!.click();const before=editor.getProject().scene.layers[0];change('detail-size','S');expect(editor.getProject().scene.detail).toBe('S');expect(editor.getProject().scene.layers[0].assetId).not.toBe(before.assetId);expect(root.querySelectorAll('[data-add]')).toHaveLength(1);change('asset-family','Changed');expect(root.querySelector('#message')?.textContent).toContain('сохран');change('detail-size','L');expect(editor.getProject().scene.detail).toBe('S');expect(root.querySelector('#message')?.textContent).toContain('Changed');});
+ it('imports ordinary files into selected empty-canvas detail and exposes role/family controls',async()=>{const editor=mount(root,{restore:false});change('detail-size','S');await editor.importSVG([file(wallet,'Wallet.svg')]);root.querySelector<HTMLButtonElement>('[data-add]')!.click();expect(editor.getProject().assets[0]).toMatchObject({detail:'S',family:'Wallet',role:'main'});change('asset-role','background');expect(editor.getProject().assets[0].role).toBe('background');change('asset-detail','L');expect(editor.getProject().assets[0].detail).toBe('S');expect(root.querySelector('#message')?.textContent).toContain('детализац');});
+ it('persists applied palette groups, restores originals and rejects invalid metadata',async()=>{const editor=mount(root,{restore:false});await editor.importSVG([file(wallet,'Wallet.svg')]);root.querySelector<HTMLButtonElement>('[data-add]')!.click();button('apply-palette').click();expect(editor.getProject().scene.palette?.background.length).toBeGreaterThan(0);const restored=await validateProject(editor.getProject());expect(restored.scene.palette).toEqual(editor.getProject().scene.palette);button('original-colors').click();expect(editor.getProject().scene.palette).toBeUndefined();const bad:any=editor.getProject();bad.assets[0].role='oops';await expect(validateProject(bad)).rejects.toThrow();bad.assets[0].role='main';bad.scene.palette={background:['red'],objects:['#fff']};await expect(validateProject(bad)).rejects.toThrow();});
+});
+
+describe('library metadata import boundaries',()=>{
+ it('restores legacy defaults and rejects invalid detail, role, family and palette groups',async()=>{
+  const asset=await readAsset(wallet,'Wallet.svg');const p:any={version:1,assets:[asset],scene:{width:400,height:400,title:'',colorMap:{},layers:[]}};
+  delete p.assets[0].family;delete p.assets[0].detail;delete p.assets[0].role;
+  expect((await validateProject(p)).assets[0]).toMatchObject({family:'Wallet',detail:'L',role:'main'});
+  for(const [key,value]of [['detail','XL'],['role',null],['family',12]]){const bad=JSON.parse(JSON.stringify(p));bad.assets[0][key as string]=value;await expect(validateProject(bad)).rejects.toThrow();}
+  p.scene.detail=null;await expect(validateProject(p)).rejects.toThrow();
+ });
+ it('imports custom background/object groups and permits editing inactive source detail without changing original bytes',async()=>{
+  const editor=mount(root,{restore:false});await editor.importSVG([file(wallet,'Wallet.svg')]);
+  const asset=editor.getProject().assets[0];change('library-metadata',asset.id);change('asset-detail','S');expect(editor.getProject().assets[0]).toMatchObject({detail:'S',sourceHash:asset.sourceHash,sourceText:wallet});
+  const input=root.querySelector<HTMLInputElement>('#palette-file')!;Object.defineProperty(input,'files',{value:[file('{"background":["#eee"],"objects":["#f00"]}','palette.json')]});input.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.querySelector('#message')?.textContent).toContain('Загружены цвета'));
+  expect(root.querySelector<HTMLInputElement>('[data-group="background"]')?.value).toBe('#eeeeee');expect(root.querySelector<HTMLInputElement>('[data-group="objects"]')?.value).toBe('#ff0000');
+ });
+});
+
+describe('untrusted metadata rendering',()=>{
+ it('opens a project with markup in family metadata as plain text',async()=>{
+  const asset=await readAsset(wallet,'Wallet.svg');asset.family='"><img src="x" onerror="alert(1)">';
+  const project={version:1,assets:[asset],scene:{width:400,height:400,title:'',detail:'L',colorMap:{},layers:[]}};
+  const editor=mount(root,{restore:false});const input=root.querySelector<HTMLInputElement>('#project-file')!;Object.defineProperty(input,'files',{value:[file(JSON.stringify(project),'project.json')]});input.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.querySelector('#message')?.textContent).toContain('Проект открыт.'));
+  expect(root.querySelector('img[src="x"],[onerror]')).toBeNull();expect(editor.getProject().assets[0].family).toBe(asset.family);expect(root.querySelector('#library-grid')?.textContent).toContain(asset.family);
+ });
 });

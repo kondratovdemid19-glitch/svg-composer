@@ -377,3 +377,32 @@ describe('review: inherited structural paint dependencies', () => {
     expect(out.querySelector('path')?.getAttribute('d')).toBe('M0 0L20 20');
   });
 });
+
+
+import { switchDetail, paletteGroups } from '../src/core';
+describe('library detail and role rules',()=>{
+ const svg=(w:number,h:number,n=0)=>`<svg viewBox="0 0 ${w} ${h}"><path d="M${n} 0L3 3" fill="#ff0000"/><circle r="1" fill="rgba(255,0,0,0.5)"/></svg>`;
+ const scene=(a:any):Scene=>({width:400,height:400,title:'',detail:'L',colorMap:{},layers:[{id:'a',assetId:a.id,x:101,y:102,scale:2,rotation:30,visible:false,locked:true}]});
+ it('parses filename metadata and switches supplied counterparts uniformly without mutating source scene',async()=>{const l=await readAsset(svg(100,50),'Кошелек--L--main.svg');const small=await readAsset(svg(40,40,1),'Кошелек--S--main.svg');expect(l).toMatchObject({family:'Кошелек',detail:'L',role:'main'});const before=scene(l);const switched=switchDetail(before,[l,small],'S');expect(switched.detail).toBe('S');expect(switched.layers[0]).toEqual({...before.layers[0],assetId:small.id,scale:2.5});expect(before.layers[0].assetId).toBe(l.id);expect(small.sourceText).toBe(svg(40,40,1));});
+ it('cancels missing or ambiguous counterpart changes atomically',async()=>{const l=await readAsset(svg(100,50),'Кошелек--L--main.svg');const a=await readAsset(svg(30,30,1),'Кошелек--S--main.svg');const b=await readAsset(svg(40,40,2),'кошелек--S--main.svg');const before=scene(l);expect(()=>switchDetail(before,[l],'S')).toThrow(/Кошелек/);expect(()=>switchDetail(before,[l,a,b],'S')).toThrow(/Кошелек/);expect(before.detail).toBe('L');});
+ it('accepts strict grouped palettes and preserves flat palette compatibility',()=>{expect(paletteGroups('{"background":["#fff"],"objects":["#f00"]}')).toEqual({background:['#ffffff'],objects:['#ff0000']});expect(paletteGroups('#f00 #00f').background).toEqual(['#e4e9f1']);expect(()=>paletteGroups('{"background":["red"],"objects":["#f00"]}')).toThrow();});
+ it('restricts background colors while main can use the union and alpha survives',async()=>{const main=await readAsset(svg(20,20),'Wallet--L--main.svg');const bg=await readAsset(svg(20,20,1),'Cloud--L--background.svg');const p:any={...scene(main),palette:{background:['#eeeeee'],objects:['#00ff00']},layers:[{...scene(main).layers[0],visible:true},{...scene(bg).layers[0],id:'b',visible:true}]};const out=parse(composeSvg(p,[main,bg]));expect(out.querySelector('[id="composition-0"] path')?.getAttribute('fill')).toBe('#00ff00');expect(out.querySelector('[id="composition-0"] circle')?.getAttribute('fill')).toBe('rgba(238,238,238,0.5)');expect(out.querySelector('[id="composition-1"] path')?.getAttribute('fill')).toBe('#eeeeee');expect(out.querySelector('[id="composition-1"] circle')?.getAttribute('fill')).toBe('rgba(238,238,238,0.5)');delete p.palette;p.colorMap={'#ff0000':'#00ff00'};expect(parse(composeSvg(p,[main,bg])).querySelector('[id="composition-1"] path')?.getAttribute('fill')).toBe('#ff0000');});
+});
+
+describe('grouped palette preservation checks',()=>{
+ it('preserves mask white and translucent near-black outlines under applied role palettes',async()=>{
+  const a=await readAsset('<svg viewBox="0 0 10 10"><defs><mask id="m"><rect width="10" height="10" fill="#fff"/></mask></defs><path d="M0 0L4 4" fill="#f00" stroke="rgba(17,17,17,0.5)" mask="url(#m)"/></svg>','Wallet--L--main.svg');
+  const out=parse(composeSvg({width:400,height:400,title:'',detail:'L',colorMap:{},palette:{background:['#000000'],objects:['#00ff00']},layers:[{id:'x',assetId:a.id,x:200,y:200,scale:1,rotation:0,visible:true,locked:false}]},[a]));
+  expect(out.querySelector('mask rect')?.getAttribute('fill')).toBe('#ffffff');expect(out.querySelector('path')?.getAttribute('stroke')).toBe('rgba(17,17,17,0.5)');
+ });
+});
+
+describe('detail switch atomicity across layers',()=>{
+ it('keeps every layer unchanged if a later counterpart is absent',async()=>{
+  const l=await readAsset('<svg viewBox="0 0 20 10"><path d="M0 0L3 3"/></svg>','Wallet--L--main.svg');
+  const small=await readAsset('<svg viewBox="0 0 10 10"><path d="M0 0L4 4"/></svg>','Wallet--S--main.svg');
+  const missing=await readAsset('<svg viewBox="0 0 15 10"><path d="M0 0L5 5"/></svg>','Cloud--L--background.svg');
+  const scene:Scene={width:400,height:400,title:'',detail:'L',colorMap:{},layers:[l,missing].map((a,i)=>({id:`l${i}`,assetId:a.id,x:100+i*50,y:200,scale:1,rotation:10,visible:true,locked:false}))};
+  const original=JSON.stringify(scene);expect(()=>switchDetail(scene,[l,small,missing],'S')).toThrow(/Cloud/);expect(JSON.stringify(scene)).toBe(original);
+ });
+});

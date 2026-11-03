@@ -1,4 +1,4 @@
-import type { Asset, Scene, PlanMode, CompositionPlan } from "./types";
+import type { Asset, Scene, PlanMode, CompositionPlan, Detail, AssetRole, PaletteGroups } from "./types";
 const NS = "http://www.w3.org/2000/svg";
 const XLINK = "http://www.w3.org/1999/xlink";
 function fail(message: string): never {
@@ -367,6 +367,46 @@ const has = (tokens: string[], prefixes: string[]) =>
   tokens.some((t) =>
     prefixes.some((p) => t === p || (p.length >= 3 && t.startsWith(p))),
   );
+export function assetMetadata(value: { family?: unknown; detail?: unknown; role?: unknown }, filename: string): { family: string; detail: Detail; role: AssetRole } {
+  const base = filename.replace(/\.svg$/i, "");
+  const match = base.match(/^(.*?)--([SL])--(main|background)$/i);
+  const family = value.family === undefined ? (match?.[1] ?? base) : value.family;
+  const detail = value.detail === undefined ? (match?.[2].toUpperCase() ?? "L") : value.detail;
+  const role = value.role === undefined ? (match?.[3].toLowerCase() ?? "main") : value.role;
+  if (typeof family !== "string" || !family.trim() || family.length > 100 || /[\u0000-\u001f]/.test(family)) fail("Укажите название семейства от 1 до 100 знаков.");
+  if (detail !== "S" && detail !== "L") fail("Детализация должна быть S или L.");
+  if (role !== "main" && role !== "background") fail("Укажите основной или фоновый объект.");
+  return { family: family.trim(), detail, role };
+}
+export function switchDetail(scene: Scene, assets: Asset[], detail: Detail): Scene {
+  if (detail !== "S" && detail !== "L") fail("Детализация должна быть S или L.");
+  const normalize = (family: string) => family.normalize("NFKC").trim().toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ");
+  const layers = scene.layers.map(layer => {
+    const old = assets.find(a => a.id === layer.assetId);
+    if (!old) fail("Исходник слоя не найден.");
+    const metadata = assetMetadata(old, old.name);
+    const candidates = assets.filter(a => { const m = assetMetadata(a,a.name); return normalize(m.family) === normalize(metadata.family) && m.role === metadata.role && m.detail === detail; });
+    if (candidates.length !== 1) fail(`«${metadata.family}»: ${candidates.length ? "найдено несколько вариантов" : "нет исходника"} ${detail}. Переключение отменено.`);
+    const next = candidates[0];
+    const scale = layer.scale * Math.min(old.width / next.width, old.height / next.height);
+    if (!Number.isFinite(scale) || scale < 0.001 || scale > 100) fail(`«${metadata.family}»: масштаб выходит за допустимые границы. Переключение отменено.`);
+    return { ...layer, assetId: next.id, scale };
+  });
+  return { ...scene, detail, layers };
+}
+export function validatePaletteGroups(value: unknown): PaletteGroups {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("Нужны группы цветов фона и объектов.");
+  const group = value as Record<string, unknown>;
+  const validate = (v: unknown): string[] => {
+    if (!Array.isArray(v) || !v.length || v.length > 8 || v.some(c => typeof c !== "string" || !/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(c))) fail("В каждой группе палитры нужно от 1 до 8 HEX-цветов.");
+    return [...new Set((v as string[]).map(c => normalizeColor(c)!))];
+  };
+  return { background: validate(group.background), objects: validate(group.objects) };
+}
+export function paletteGroups(input: string): PaletteGroups {
+  if (input.trim().startsWith("{")) { let value: unknown; try { value = JSON.parse(input); } catch { fail("Не удалось прочитать группы палитры JSON."); } return validatePaletteGroups(value); }
+  return { background: ["#e4e9f1"], objects: paletteColors(input) };
+}
 export async function readAsset(
   svgText: string,
   filename: string,
@@ -391,6 +431,7 @@ export async function readAsset(
   return {
     id: `asset-${sourceHash}`,
     name: filename,
+    ...assetMetadata({}, filename),
     tags: [...tags],
     width: info.width,
     height: info.height,
@@ -419,6 +460,7 @@ export function planComposition(
   width: number,
   height: number,
   variant = 0,
+  detail: Detail = "L",
 ): CompositionPlan {
   canvas(width, height);
   if (!["meaning", "objects"].includes(mode) || !Number.isSafeInteger(variant))
@@ -434,7 +476,7 @@ export function planComposition(
   if (mode === "meaning")
     for (const [topic, synonyms] of Object.entries(topics))
       if (has(tokens, synonyms)) wanted.add(topic);
-  const matched = assets
+  const matched = assets.filter(a => assetMetadata(a, a.name).detail === detail)
     .filter((a) =>
       a.tags.some(
         (tag) =>
@@ -525,21 +567,25 @@ export function recolorMap(
   originalColors: string[],
   palette: string[],
 ): Record<string, string> {
-  const colors = paletteColors(JSON.stringify(palette));
+  return mapColors(originalColors, paletteColors(JSON.stringify(palette)));
+}
+function mapColors(originalColors: string[], colors: string[]): Record<string,string> {
   let i = 0;
   const result: Record<string, string> = {};
   for (const original of originalColors) {
     const c = normalizeColor(original);
     if (!c) fail("Недопустимый исходный цвет.");
-    const dark =
-      /^#[\da-f]{6}$/.test(c) &&
-      [1, 3, 5].every((pos) => parseInt(c.slice(pos, pos + 2), 16) <= 48);
+    const channels = c.startsWith("#") ? [1,3,5].map(pos=>parseInt(c.slice(pos,pos+2),16)) : c.slice(5,-1).split(",").slice(0,3).map(Number);
+    const dark = channels.every(channel=>channel <= 48);
     result[original] = dark ? c : withSourceAlpha(c, colors[i++ % colors.length]);
   }
   return result;
 }
 export function composeSvg(scene: Scene, assets: Asset[]): string {
   canvas(scene.width, scene.height);
+  if (scene.detail !== undefined && scene.detail !== "S" && scene.detail !== "L") fail("Неверная детализация проекта.");
+  const palette = scene.palette === undefined ? undefined : validatePaletteGroups(scene.palette);
+  for (const a of assets) assetMetadata(a,a.name);
   const doc = document.implementation.createDocument(NS, "svg", null);
   const root = doc.documentElement;
   root.setAttribute("width", String(scene.width));
@@ -572,7 +618,10 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
       fail("Недопустимое положение, поворот или масштаб слоя.");
     const asset = assets.find((a) => a.id === layer.assetId);
     if (!asset) fail("Исходный SVG слоя не найден. Импортируйте его заново.");
+    const metadata = assetMetadata(asset,asset.name);
+    if (scene.detail && metadata.detail !== scene.detail) fail("Слои должны соответствовать выбранной детализации.");
     if (!layer.visible) continue;
+    const layerMapping = palette ? new Map(Object.entries(mapColors(asset.colors, metadata.role === "background" ? palette.background : [...new Set([...palette.objects,...palette.background])]))) : metadata.role === "background" ? new Map<string,string>() : mapping;
     const info = inspect(asset.svg);
     if (
       !Number.isFinite(asset.width) ||
@@ -603,7 +652,7 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
             attr.value.replace(internalURL, `url(#${prefix}$2)`),
           );
         else if (colorAttrs.has(attr.localName) && !controls.has(el)) {
-          const replacement = mapping.get(normalizeColor(attr.value) ?? "");
+          const replacement = layerMapping.get(normalizeColor(attr.value) ?? "");
           if (replacement) el.setAttribute(attr.name, withSourceAlpha(attr.value, replacement));
         }
       }

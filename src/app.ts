@@ -2,10 +2,9 @@ import {
   readAsset,
   composeSvg,
   planComposition,
-  paletteColors,
-  recolorMap,
+  assetMetadata, switchDetail, paletteGroups, validatePaletteGroups,
 } from "./core";
-import type { Asset, Scene, Layer, PlanMode } from "./types";
+import type { Asset, Scene, Layer, PlanMode, Detail, PaletteGroups } from "./types";
 import { loadProject, saveProject, type Project } from "./storage";
 
 const escape = (s: string) =>
@@ -23,12 +22,10 @@ const defaultScene = (): Scene => ({
   title: "Новая композиция",
   layers: [],
   colorMap: {},
+  detail: "L",
 });
 const uid = () => crypto.randomUUID();
 const niceSize = (size: number) => `${(size / 1024).toFixed(0)} КБ`;
-const colorsOf = (assets: Asset[]) => [
-  ...new Set(assets.flatMap((a) => a.colors)),
-];
 const initialPalette = [
   "#DCD6F7",
   "#B2A1E0",
@@ -73,6 +70,7 @@ export async function validateProject(value: unknown): Promise<Project> {
       typeof raw.sourceText === "string" ? raw.sourceText : raw.svg,
       raw.name,
     );
+    Object.assign(asset, assetMetadata(raw,raw.name));
     asset.name = raw.name.slice(0, 100);
     asset.tags = Array.isArray(raw.tags)
       ? raw.tags
@@ -84,6 +82,8 @@ export async function validateProject(value: unknown): Promise<Project> {
     if (!assets.some((a) => a.id === asset.id)) assets.push(asset);
   }
   const scene = clone(p.scene);
+  if (scene.detail === undefined) scene.detail = "L";
+  if (scene.palette !== undefined) scene.palette = validatePaletteGroups(scene.palette);
   if (
     typeof scene.title !== "string" ||
     scene.title.length > 300 ||
@@ -110,8 +110,9 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
   let assets: Asset[] = [];
   let scene = defaultScene();
   let selectedId: string | null = null;
+  let metadataAssetId: string | null = null;
   let mode: PlanMode = "meaning";
-  let palette = [...initialPalette];
+  let palette: PaletteGroups = {background:["#E4E9F1","#9AA5B9"],objects:[...initialPalette]};
   let filter = "";
   let busy = false;
   let history: Scene[] = [];
@@ -136,11 +137,11 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
     ["Разумные расходы", "Кошелек, монета"],
   ];
   root.innerHTML = `<a class="skip" href="#prompt">К описанию композиции</a><header class="topbar"><a class="brand" href="#"><span class="brand-mark" aria-hidden="true">⌘</span><span>сборка<span class="brand-caption">Векторные композиции</span></span></a><div class="document-name"><label class="sr-only" for="document-title">Название композиции</label><input id="document-title" maxlength="100" value="Новая композиция"><span class="document-type">SVG</span></div><div class="top-actions"><button id="open-project" class="quiet">Открыть проект</button><button id="save-project" class="quiet">Сохранить проект</button><button id="export-svg" class="primary" disabled>Экспорт SVG <span aria-hidden="true">↗</span></button></div></header>
- <main class="editor"><aside class="library-panel"><div class="panel-heading"><h1>Библиотека</h1><span id="library-count" class="count">0</span></div><p class="panel-intro">Исходные объекты.<br>Геометрия остаётся неизменной.</p><button id="import-svg" class="secondary upload-button"><span aria-hidden="true">+</span> Загрузить SVG</button><label class="sr-only" for="library-search">Найти объект</label><input id="library-search" type="search" placeholder="Найти объект…" autocomplete="off"><div id="library-grid" class="library-grid"></div><div class="library-footer"><span class="tiny-label">Только векторы</span><p>Загрузите SVG из исходной библиотеки работодателя. Новые объекты сервис не генерирует.</p></div></aside>
+ <main class="editor"><aside class="library-panel"><div class="panel-heading"><h1>Библиотека</h1><span id="library-count" class="count">0</span></div><p class="panel-intro">Исходные объекты.<br>Геометрия остаётся неизменной.</p><button id="import-svg" class="secondary upload-button"><span aria-hidden="true">+</span> Загрузить SVG</button><label class="sr-only" for="library-search">Найти объект</label><input id="library-search" type="search" placeholder="Найти объект…" autocomplete="off"><label class="sr-only" for="library-metadata">Изменить свойства исходника</label><select id="library-metadata" aria-label="Изменить свойства исходника"><option value="">Свойства любого исходника…</option></select><div id="library-grid" class="library-grid"></div><div class="library-footer"><span class="tiny-label">Только векторы</span><p>Загрузите SVG из исходной библиотеки работодателя. Новые объекты сервис не генерирует.</p></div></aside>
  <section class="work-area" aria-label="Рабочая область"><div class="prompt-panel"><div class="prompt-top"><label for="prompt">Что собираем?</label><div class="mode-switch" role="group" aria-label="Способ подбора"><button data-mode="meaning" aria-pressed="true">По смыслу</button><button data-mode="objects" aria-pressed="false">По объектам</button></div></div><div class="prompt-row"><input id="prompt" placeholder="Заголовок или метафора, например «Совместное решение»" maxlength="300"><button id="compose" class="primary" disabled>Собрать <span aria-hidden="true">→</span></button></div><div class="prompt-examples">${sampleButtons.map(([label, objects]) => `<button data-prompt="${label}" data-objects="${objects}">${label}</button>`).join("")}<span>Подбор по названиям и тегам</span></div><p id="plan-explanation" class="plan-explanation" role="status">Загрузите библиотеку, чтобы начать подбор.</p></div>
- <div class="canvas-toolbar"><div><label for="canvas-size">Холст</label><select id="canvas-size"><option value="1200x630">1200 × 630 · обложка</option><option value="1080x1080">1080 × 1080 · квадрат</option><option value="1080x1920">1080 × 1920 · вертикаль</option><option value="1600x900">1600 × 900 · 16:9</option></select></div><div class="history-tools"><button id="undo" class="icon-button" aria-label="Отменить действие" disabled>↶</button><button id="redo" class="icon-button" aria-label="Повторить действие" disabled>↷</button><button id="variant" class="quiet" disabled>Другой вариант</button></div></div><div class="canvas-viewport" id="canvas-drop" tabindex="0" aria-label="Холст композиции. Перетаскивайте объекты или используйте стрелки для перемещения."><div class="canvas-paper"><div id="stage"></div></div><div class="canvas-empty" id="canvas-empty"><span class="empty-glyph" aria-hidden="true">▧</span><h2>Композиция начинается<br>с исходников</h2><p>Загрузите SVG, затем опишите идею<br>или добавьте объекты из библиотеки.</p><button id="empty-import" class="secondary">Выбрать SVG-файлы</button><span>Объекты и результат сохраняются в векторе.</span></div></div><div class="canvas-status"><span id="selection-status">Ничего не выбрано</span><span id="save-status" role="status">Проект сохраняется только на этом устройстве</span></div><p id="message" class="message" role="status" aria-live="polite"></p></section>
- <aside class="inspector-panel"><section class="inspector-section"><div class="panel-heading"><h2>Объект</h2><span id="object-index" class="subtle">—</span></div><p id="object-empty" class="panel-intro">Выберите объект на холсте,<br>чтобы изменить его положение.</p><div id="object-controls" hidden><label for="asset-name">Название в библиотеке</label><input id="asset-name" maxlength="100"><label for="asset-tags">Теги для подбора</label><input id="asset-tags" placeholder="Идея, знание, работа" maxlength="300"><div class="numeric-grid"><label>X<input type="number" id="layer-x" step="1"></label><label>Y<input type="number" id="layer-y" step="1"></label><label>Масштаб, %<input type="number" id="layer-scale" min="0.1" max="10000" step="1"></label><label>Поворот, °<input type="number" id="layer-rotation" min="-360" max="360" step="1"></label></div><div class="object-actions"><button id="duplicate" class="secondary">Дублировать</button><button id="delete-layer" class="quiet danger">Удалить</button></div><p id="source-proof" class="source-proof"></p></div></section>
- <section class="inspector-section"><div class="panel-heading"><h2>Палитра</h2><button id="import-palette" class="text-button">Загрузить</button></div><p class="small-copy">Перекрашиваются заливки.<br>Тёмные контуры сохраняются.</p><div class="palette-choices"><button data-palette="lilac">Сирень</button><button data-palette="sand">Песок</button><button data-palette="mint">Мята</button></div><div id="palette-swatches" class="palette-swatches"></div><div class="palette-actions"><button id="apply-palette" class="secondary" disabled>Применить</button><button id="original-colors" class="quiet" disabled>Исходные цвета</button></div><p class="field-hint">Для загрузки: TXT со списком цветов #HEX или JSON-массив из 2–8 цветов.</p></section>
+ <div class="canvas-toolbar"><div><label for="detail-size">Детализация</label><select id="detail-size"><option value="L">L · подробно</option><option value="S">S · упрощённо</option></select></div><div><label for="canvas-size">Холст</label><select id="canvas-size"><option value="1200x630">1200 × 630 · обложка</option><option value="1080x1080">1080 × 1080 · квадрат</option><option value="1080x1920">1080 × 1920 · вертикаль</option><option value="1600x900">1600 × 900 · 16:9</option></select></div><div class="history-tools"><button id="undo" class="icon-button" aria-label="Отменить действие" disabled>↶</button><button id="redo" class="icon-button" aria-label="Повторить действие" disabled>↷</button><button id="variant" class="quiet" disabled>Другой вариант</button></div></div><div class="canvas-viewport" id="canvas-drop" tabindex="0" aria-label="Холст композиции. Перетаскивайте объекты или используйте стрелки для перемещения."><div class="canvas-paper"><div id="stage"></div></div><div class="canvas-empty" id="canvas-empty"><span class="empty-glyph" aria-hidden="true">▧</span><h2>Композиция начинается<br>с исходников</h2><p>Загрузите SVG, затем опишите идею<br>или добавьте объекты из библиотеки.</p><button id="empty-import" class="secondary">Выбрать SVG-файлы</button><span>Объекты и результат сохраняются в векторе.</span></div></div><div class="canvas-status"><span id="selection-status">Ничего не выбрано</span><span id="save-status" role="status">Проект сохраняется только на этом устройстве</span></div><p id="message" class="message" role="status" aria-live="polite"></p></section>
+ <aside class="inspector-panel"><section class="inspector-section"><div class="panel-heading"><h2>Объект</h2><span id="object-index" class="subtle">—</span></div><p id="object-empty" class="panel-intro">Выберите объект на холсте,<br>чтобы изменить его положение.</p><div id="object-controls" hidden><label for="asset-name">Название в библиотеке</label><input id="asset-name" maxlength="100"><label for="asset-family">Семейство компонента</label><input id="asset-family" maxlength="100"><div class="metadata-grid"><label for="asset-detail">Детализация<select id="asset-detail"><option>S</option><option>L</option></select></label><label for="asset-role">Назначение<select id="asset-role"><option value="main">Основной объект</option><option value="background">Фоновый объект</option></select></label></div><label for="asset-tags">Теги для подбора</label><input id="asset-tags" placeholder="Идея, знание, работа" maxlength="300"><div class="numeric-grid"><label>X<input type="number" id="layer-x" step="1"></label><label>Y<input type="number" id="layer-y" step="1"></label><label>Масштаб, %<input type="number" id="layer-scale" min="0.1" max="10000" step="1"></label><label>Поворот, °<input type="number" id="layer-rotation" min="-360" max="360" step="1"></label></div><div class="object-actions"><button id="duplicate" class="secondary">Дублировать</button><button id="delete-layer" class="quiet danger">Удалить</button></div><p id="source-proof" class="source-proof"></p></div></section>
+ <section class="inspector-section"><div class="panel-heading"><h2>Палитра</h2><button id="import-palette" class="text-button">Загрузить</button></div><p class="small-copy">Фон использует только цвета фона; основные объекты — обе группы. Тёмные контуры сохраняются.</p><div class="palette-choices"><button data-palette="lilac">Сирень</button><button data-palette="sand">Песок</button><button data-palette="mint">Мята</button></div><div id="palette-swatches" class="palette-swatches"></div><div class="palette-actions"><button id="apply-palette" class="secondary" disabled>Применить</button><button id="original-colors" class="quiet" disabled>Исходные цвета</button></div><p class="field-hint">TXT или JSON-массив: 2–8 цветов объектов, фон — нейтральный. JSON с background и objects: 1–8 HEX-цветов в каждой группе.</p></section>
  <section class="inspector-section layer-section"><div class="panel-heading"><h2>Слои</h2><span id="layer-count" class="count">0</span></div><p class="small-copy">Верхний слой — передний план.</p><div id="layers"></div><div class="layer-actions"><button id="layer-up" class="quiet" disabled>↑ Вперёд</button><button id="layer-down" class="quiet" disabled>↓ Назад</button></div></section></aside></main>
  <input id="svg-files" type="file" accept=".svg,image/svg+xml" multiple hidden><input id="project-file" type="file" accept=".json,application/json" hidden><input id="palette-file" type="file" accept=".txt,.json,text/plain,application/json" hidden>`;
   const $ = <T extends HTMLElement = HTMLElement>(q: string) =>
@@ -262,7 +263,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
   function renderLibrary() {
     $("#library-count").textContent = String(assets.length);
     const q = filter.trim().toLocaleLowerCase("ru");
-    const visible = assets.filter((a) =>
+    const visible = assets.filter((a) => a.detail === (scene.detail ?? "L")).filter((a) =>
       (a.name + " " + a.tags.join(" ")).toLocaleLowerCase("ru").includes(q),
     );
     $("#library-grid").innerHTML = assets.length
@@ -270,29 +271,34 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         ? visible
             .map(
               (a) =>
-                `<button class="asset-card" data-add="${escape(a.id)}" title="Добавить ${escape(a.name)} на холст"><span class="asset-preview"><img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(a.svg)}" alt="" loading="lazy"></span><strong>${escape(a.name)}</strong><span>Исходный SVG · ${Math.round(a.width)} × ${Math.round(a.height)}</span></button>`,
+                `<div class="asset-entry"><button class="asset-card" data-add="${escape(a.id)}" title="Добавить ${escape(a.name)} на холст"><span class="asset-preview"><img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(a.svg)}" alt="" loading="lazy"></span><strong>${escape(a.name)}</strong><span>${a.detail} · ${a.role === "main" ? "Основной объект" : "Фоновый объект"}</span><span>${escape(a.family)} · ${Math.round(a.width)} × ${Math.round(a.height)}</span></button><button class="asset-settings quiet" data-edit="${escape(a.id)}">Свойства</button></div>`,
             )
             .join("")
-        : '<p class="library-empty">По этому запросу нет объектов. Попробуйте название из файла.</p>'
+        : `<p class="library-empty">${q ? "По этому запросу нет объектов. Попробуйте название из файла." : `Нет исходников ${scene.detail ?? "L"}. Выберите другую детализацию или измените свойства исходника в списке выше.`}</p>`
       : '<div class="library-empty"><span aria-hidden="true">↥</span><strong>Ваша исходная библиотека</strong><p>Добавьте SVG-файлы. Их можно будет использовать в нескольких композициях.</p></div>';
-    $<HTMLButtonElement>("#compose").disabled = busy || !assets.length;
+    const metadataSelect = root.querySelector<HTMLSelectElement>("#library-metadata");
+    if(metadataSelect) metadataSelect.innerHTML = '<option value="">Свойства любого исходника…</option>' + assets.map(a=>`<option value="${escape(a.id)}">${escape(a.family)} · ${a.detail} · ${a.role === "main" ? "основной" : "фон"}</option>`).join("");
+    $<HTMLButtonElement>("#compose").disabled = busy || !assets.some(a => a.detail === (scene.detail ?? "L"));
   }
   function renderInspector() {
     const layer = selected(),
-      asset = layer && assetById(layer.assetId);
-    $("#object-empty").hidden = !!layer;
-    $("#object-controls").hidden = !layer;
+      asset = layer ? assetById(layer.assetId) : metadataAssetId ? assetById(metadataAssetId) : undefined;
+    $("#object-empty").hidden = !!asset;
+    $("#object-controls").hidden = !asset;
     $("#object-index").textContent = layer
       ? `${scene.layers.indexOf(layer) + 1} / ${scene.layers.length}`
       : "—";
-    if (layer && asset) {
+    if (asset) {
       for (const [id, val] of [
         ["#asset-name", asset.name],
         ["#asset-tags", asset.tags.join(", ")],
-        ["#layer-x", String(Math.round(layer.x))],
-        ["#layer-y", String(Math.round(layer.y))],
-        ["#layer-scale", String(Math.round(layer.scale * 1000) / 10)],
-        ["#layer-rotation", String(Math.round(layer.rotation))],
+        ["#asset-family", asset.family],
+        ["#asset-detail", asset.detail],
+        ["#asset-role", asset.role],
+        ["#layer-x", String(Math.round(layer?.x ?? 0))],
+        ["#layer-y", String(Math.round(layer?.y ?? 0))],
+        ["#layer-scale", String(Math.round((layer?.scale ?? 1) * 1000) / 10)],
+        ["#layer-rotation", String(Math.round(layer?.rotation ?? 0))],
       ])
         if (document.activeElement !== field(id)) field(id).value = val;
       for (const id of [
@@ -301,7 +307,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         "#layer-scale",
         "#layer-rotation",
       ])
-        field(id).disabled = layer.locked;
+        field(id).disabled = !layer || layer.locked;
       $("#source-proof").textContent =
         `Исходник сохранён · SHA-256 ${asset.sourceHash.slice(0, 12)}…`;
     }
@@ -315,7 +321,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
           )
           .join("")
       : '<p class="small-copy layer-empty">Объекты появятся здесь<br>после добавления на холст.</p>';
-    for (const id of ["#layer-up", "#layer-down"])
+    for (const id of ["#layer-up", "#layer-down", "#duplicate", "#delete-layer"])
       $<HTMLButtonElement>(id).disabled = !layer;
     $<HTMLButtonElement>("#undo").disabled = !history.length;
     $<HTMLButtonElement>("#redo").disabled = !future.length;
@@ -323,7 +329,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
       (l) => l.visible,
     );
     $<HTMLButtonElement>("#apply-palette").disabled = !scene.layers.length;
-    $<HTMLButtonElement>("#original-colors").disabled = !Object.keys(
+    $<HTMLButtonElement>("#original-colors").disabled = !scene.palette && !Object.keys(
       scene.colorMap,
     ).length;
     $<HTMLButtonElement>("#variant").disabled = !scene.layers.length;
@@ -332,14 +338,10 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
       : `${scene.layers.length} объектов · ${scene.width} × ${scene.height}`;
   }
   function renderPalette() {
-    $("#palette-swatches").innerHTML = palette
-      .map(
-        (color, i) =>
-          `<label class="swatch" title="Цвет ${i + 1}: ${color}"><input type="color" data-color="${i}" value="${color}" aria-label="Цвет палитры ${i + 1}"><span>${color}</span></label>`,
-      )
-      .join("");
+    $("#palette-swatches").innerHTML = (["objects","background"] as const).map(group => `<div class="palette-group"><h3>${group === "objects" ? "Цвета объектов" : "Цвета фона"}</h3><div class="palette-group-chips">${palette[group].map((color,i)=>`<label class="swatch" title="Цвет ${i+1}: ${color}"><input type="color" data-color="${i}" data-group="${group}" value="${color}" aria-label="${group === "objects" ? "Цвет объектов" : "Цвет фона"} ${i+1}"><span>${color}</span></label>`).join("")}</div></div>`).join("");
   }
   function render() {
+    $<HTMLSelectElement>("#detail-size").value = scene.detail ?? "L";
     paintStage();
     renderLibrary();
     renderInspector();
@@ -357,7 +359,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
   }
   function addAsset(id: string) {
     const asset = assetById(id);
-    if (!asset) return;
+    if (!asset || asset.detail !== (scene.detail ?? "L")) return;
     if (scene.layers.length >= 50) {
       notify(
         "На холсте уже 50 объектов. Удалите ненужные перед добавлением.",
@@ -410,7 +412,9 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         try {
           if (!/\.svg$/i.test(file.name)) throw new Error("нужен файл SVG");
           if (file.size > 3 * 1024 * 1024) throw new Error("больше 3 МБ");
-          loaded.push(await readAsset(await file.text(), file.name));
+          const asset = await readAsset(await file.text(), file.name);
+          if (!/--[SL]--(?:main|background)\.svg$/i.test(file.name)) asset.detail = scene.detail ?? "L";
+          loaded.push(asset);
         } catch (e) {
           errors.push(
             `${file.name}: ${e instanceof Error ? e.message : "не удалось прочитать"}`,
@@ -450,6 +454,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
     if (b.id === "open-project") field("#project-file").click();
     if (b.id === "import-palette") field("#palette-file").click();
     if (b.dataset.add) addAsset(b.dataset.add);
+    if (b.dataset.edit) { selectedId=null;metadataAssetId=b.dataset.edit;renderInspector();paintSelection(); }
     if (b.dataset.mode) {
       mode = b.dataset.mode as PlanMode;
       root
@@ -499,6 +504,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
           scene.width,
           scene.height,
           b.id === "variant" ? ++planningVariant : 0,
+          scene.detail ?? "L",
         );
         $("#plan-explanation").textContent = plan.explanation;
         if (!plan.layers.length) {
@@ -579,13 +585,15 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
       }
     }
     if (b.dataset.palette) {
-      palette = [...presets[b.dataset.palette]];
+      const objects = [...presets[b.dataset.palette]];
+      palette = { objects, background: b.dataset.palette === "lilac" ? ["#E4E9F1","#9AA5B9"] : b.dataset.palette === "sand" ? ["#D8DFDA","#353C44"] : ["#CFD7E7","#8798BA"] };
       renderPalette();
     }
     if (b.id === "apply-palette") {
       try {
         checkpoint();
-        scene.colorMap = recolorMap(colorsOf(assets), palette);
+        scene.palette = validatePaletteGroups(palette);
+        scene.colorMap = {};
         render();
         scheduleSave();
         notify("Заливки перекрашены. Исходные SVG сохранены отдельно.");
@@ -599,6 +607,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
     if (b.id === "original-colors") {
       checkpoint();
       scene.colorMap = {};
+      delete scene.palette;
       render();
       scheduleSave();
     }
@@ -639,7 +648,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
       scheduleSave();
     }
     if (t.dataset.color !== undefined) {
-      palette[Number(t.dataset.color)] = t.value;
+      palette[t.dataset.group as keyof PaletteGroups][Number(t.dataset.color)] = t.value;
       const label = t.closest("label");
       if (label) {
         label.title = `Цвет ${Number(t.dataset.color) + 1}: ${t.value}`;
@@ -649,16 +658,36 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
   };
   root.onchange = async (event) => {
     const t = event.target as HTMLInputElement;
+    if (t.id === "detail-size") {
+      try { const next = switchDetail(scene,assets,t.value as Detail); checkpoint();scene=next;metadataAssetId=null;render();scheduleSave();notify("Детализация переключена на исходные компоненты " + scene.detail + "."); }
+      catch(e) { render();notify(e instanceof Error ? e.message : "Не удалось переключить детализацию.",true); }
+    }
+    if (t.id === "library-metadata") { selectedId=null;metadataAssetId=t.value;renderInspector();paintSelection(); }
+    if (["asset-family","asset-detail","asset-role"].includes(t.id)) {
+      const layer = selected();const asset = layer ? assetById(layer.assetId) : assets.find(a=>a.id===metadataAssetId);
+      if(asset)try {
+        const key = t.id.slice(6) as "family" | "detail" | "role";
+        const metadata = assetMetadata({...asset,[key]:t.value},asset.name);
+        const candidate = {...asset,...metadata};const nextAssets=assets.map(a=>a===asset?candidate:a);
+        if(scene.layers.some(l=>l.assetId===asset.id)) {
+          if(metadata.detail !== (scene.detail ?? "L")) throw new Error("Сначала уберите объект с холста: его детализация должна совпадать с композицией.");
+          switchDetail(scene,nextAssets,scene.detail ?? "L");
+        }
+        // Old scene snapshots can reference this source in its previous detail.
+        if (metadata.detail !== asset.detail) { history=[];future=[]; }
+        Object.assign(asset,metadata);renderLibrary();renderInspector();paintStage();scheduleSave();notify("Метаданные сохранены. Для переключения S/L нужна единственная пара с тем же семейством и назначением.");
+      } catch(e) { renderInspector(); field("#"+t.id).value=String(asset[t.id.slice(6) as "family"|"detail"|"role"]);notify(e instanceof Error?e.message:"Некорректные свойства.",true); }
+    }
     if (t.id === "svg-files") await importSVG(Array.from(t.files || []));
     if (t.id === "palette-file") {
       try {
         const f = t.files?.[0];
         if (!f) return;
         if (f.size > 100000) throw new Error("Файл палитры слишком большой.");
-        palette = paletteColors(await f.text());
+        palette = paletteGroups(await f.text());
         renderPalette();
         notify(
-          `Загружена палитра: ${palette.length} цветов. Нажмите «Применить».`,
+          `Загружены цвета объектов и фона. Нажмите «Применить».`,
         );
       } catch (e) {
         notify(
@@ -681,6 +710,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         const p = await validateProject(JSON.parse(await f.text()));
         assets = p.assets;
         scene = p.scene;
+        if(scene.palette) palette=clone(scene.palette);
         history = [];
         future = [];
         selectedId = null;
@@ -716,7 +746,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
     }
     if (t.id === "asset-name" || t.id === "asset-tags") {
       const l = selected(),
-        a = l && assetById(l.assetId);
+        a = l ? assetById(l.assetId) : assets.find(a=>a.id===metadataAssetId);
       if (a) {
         if (t.id === "asset-name")
           a.name = t.value.trim().slice(0, 100) || a.name;
@@ -854,6 +884,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         if (revision !== initial) return;
         assets = p.assets;
         scene = p.scene;
+        if(scene.palette) palette=clone(scene.palette);
         render();
         $("#save-status").textContent =
           "Проект восстановлен на этом устройстве";
