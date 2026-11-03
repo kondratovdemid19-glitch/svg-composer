@@ -207,3 +207,24 @@ describe('review: unsafe imported layer IDs',()=>{
  it('opens a malicious project without inserting injected markup or handlers',async()=>{const editor=mount(root,{restore:false});const input=root.querySelector<HTMLInputElement>('#project-file')!;Object.defineProperty(input,'files',{value:[file(JSON.stringify(await malicious()),'unsafe.json')]});input.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.querySelector('#message')?.textContent).not.toContain('Проверяю'));expect(root.querySelector('img[src="x"],[onerror]')).toBeNull();expect(editor.getProject().scene.layers).toHaveLength(0);expect(root.querySelector('#message')?.textContent).not.toContain('Проект открыт.');});
  it('rejects unsafe IDs on autosave restoration without creating injected nodes',async()=>{const {loadProject}=await import('../src/storage');vi.mocked(loadProject).mockResolvedValueOnce(await malicious());const editor=mount(root);await vi.waitFor(()=>expect(root.querySelector('#save-status')?.textContent).toContain('Автосохранение недоступно'));expect(root.querySelector('img[src="x"],[onerror]')).toBeNull();expect(editor.getProject().scene.layers).toHaveLength(0);});
 });
+
+describe("built-in headline examples", () => {
+  it("composes wallet and coin originals after clicking the reasonable-expenses example", async () => {
+    const editor = mount(root, { restore: false });
+    // Authored vector fixture, not employer artwork.
+    const coin = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><circle cx="30" cy="30" r="24" fill="#eec683"/></svg>';
+    await editor.importSVG([
+      file(wallet, "Кошелек.svg"),
+      file(coin, "Монета.svg"),
+      file(lamp, "Лампа.svg"),
+    ]);
+    root.querySelector<HTMLButtonElement>('[data-prompt="Разумные расходы"]')!.click();
+    expect(root.querySelector<HTMLInputElement>("#prompt")!.value).toBe("Разумные расходы");
+    button("compose").click();
+    const project = editor.getProject();
+    const selectedNames = project.scene.layers.map(layer => project.assets.find(asset => asset.id === layer.assetId)!.name);
+    expect(selectedNames).toEqual(["Кошелек.svg", "Монета.svg"]);
+    expect(root.querySelectorAll("#stage path")).toHaveLength(1);
+    expect(root.querySelectorAll("#stage circle")).toHaveLength(1);
+  });
+});

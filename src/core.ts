@@ -343,7 +343,7 @@ const lexicon = [
   { object: "rocket", words: ["rocket", "ракет"], topic: "growth" },
 ];
 const topics: Record<string, string[]> = {
-  finance: ["finance", "financial", "финанс", "богат", "сбереж", "бюджет"],
+  finance: ["finance", "financial", "финанс", "богат", "сбереж", "бюджет", "расход", "эконом"],
   cooperation: [
     "cooperation",
     "team",
