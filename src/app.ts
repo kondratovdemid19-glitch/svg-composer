@@ -2,7 +2,7 @@ import {
   readAsset,
   composeSvg,
   planComposition,
-  assetMetadata, switchDetail, paletteGroups, validatePaletteGroups,
+  assetMetadata, switchDetail, paletteGroups, validatePaletteGroups, palettePresets,
 } from "./core";
 import type { Asset, Scene, Layer, PlanMode, Detail, PaletteGroups } from "./types";
 import { loadProject, saveProject, type Project } from "./storage";
@@ -26,19 +26,6 @@ const defaultScene = (): Scene => ({
 });
 const uid = () => crypto.randomUUID();
 const niceSize = (size: number) => `${(size / 1024).toFixed(0)} КБ`;
-const initialPalette = [
-  "#DCD6F7",
-  "#B2A1E0",
-  "#7165B7",
-  "#E4E9F1",
-  "#9AA5B9",
-  "#F2C879",
-];
-const presets: Record<string, string[]> = {
-  lilac: initialPalette,
-  sand: ["#F7E9BF", "#DCA572", "#A27357", "#D8DFDA", "#8A9E96", "#353C44"],
-  mint: ["#CBE8DE", "#85C5B5", "#448A7B", "#CFD7E7", "#8798BA", "#EEC683"],
-};
 
 export async function validateProject(value: unknown): Promise<Project> {
   const p = value as Partial<Project>;
@@ -112,7 +99,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
   let selectedId: string | null = null;
   let metadataAssetId: string | null = null;
   let mode: PlanMode = "meaning";
-  let palette: PaletteGroups = {background:["#E4E9F1","#9AA5B9"],objects:[...initialPalette]};
+  let palette: PaletteGroups = clone(palettePresets.lilac);
   let filter = "";
   let busy = false;
   let history: Scene[] = [];
@@ -585,8 +572,7 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
       }
     }
     if (b.dataset.palette) {
-      const objects = [...presets[b.dataset.palette]];
-      palette = { objects, background: b.dataset.palette === "lilac" ? ["#E4E9F1","#9AA5B9"] : b.dataset.palette === "sand" ? ["#D8DFDA","#353C44"] : ["#CFD7E7","#8798BA"] };
+      palette = clone(palettePresets[b.dataset.palette]);
       renderPalette();
     }
     if (b.id === "apply-palette") {
@@ -715,6 +701,9 @@ export function mount(root: HTMLElement, options: { restore?: boolean } = {}) {
         future = [];
         selectedId = null;
         render();
+        $("#plan-explanation").textContent = assets.length
+          ? "Библиотека готова. Введите заголовок или названия объектов."
+          : "Загрузите библиотеку, чтобы начать подбор.";
         scheduleSave();
         notify("Проект открыт. Исходники повторно проверены.");
       } catch (e) {

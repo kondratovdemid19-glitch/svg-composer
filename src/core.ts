@@ -325,6 +325,12 @@ const lexicon = [
     topic: "cooperation",
   },
   { object: "lamp", words: ["lamp", "bulb", "ламп", "лампоч"], topic: "idea" },
+  { object: "book", words: ["book", "книг"], topic: "learning" },
+  { object: "headphones", words: ["headphone", "наушник"], topic: "learning" },
+  { object: "phone", words: ["phone", "телефон", "смартфон"], topic: "technology" },
+  { object: "folder", words: ["folder", "папк"], topic: "organization" },
+  { object: "pen", words: ["pen", "ручк"], topic: "idea" },
+  { object: "flowers", words: ["flower", "цветы", "букет"], topic: "care" },
   { object: "hand", words: ["hand", "рук", "ладон"], topic: "cooperation" },
   {
     object: "chart",
@@ -357,6 +363,9 @@ const topics: Record<string, string[]> = {
   growth: ["growth", "success", "развит", "рост", "успех"],
   security: ["security", "safety", "защит", "безопас", "надеж"],
   care: ["care", "love", "любов", "забот"],
+  learning: ["learning", "study", "обуч", "учеб", "знан", "образов"],
+  technology: ["technology", "digital", "техн", "цифров", "онлайн"],
+  organization: ["organization", "planning", "поряд", "организ", "план", "документ"],
 };
 const words = (s: string) =>
   s
@@ -476,7 +485,7 @@ export function planComposition(
   if (mode === "meaning")
     for (const [topic, synonyms] of Object.entries(topics))
       if (has(tokens, synonyms)) wanted.add(topic);
-  const matched = assets.filter(a => assetMetadata(a, a.name).detail === detail)
+  const candidates = assets.filter(a => assetMetadata(a, a.name).detail === detail)
     .filter((a) =>
       a.tags.some(
         (tag) =>
@@ -485,8 +494,15 @@ export function planComposition(
             (w) => tag === w || (w.length >= 4 && tag.startsWith(w)),
           ),
       ),
-    )
-    .slice(0, 5);
+    );
+  const families = new Map<string, Asset>();
+  for (const asset of candidates) {
+    const key = asset.family.normalize("NFKC").toLocaleLowerCase().trim();
+    const previous = families.get(key);
+    if (!previous || (previous.role === "background" && asset.role === "main"))
+      families.set(key, asset);
+  }
+  const matched = [...families.values()].slice(0, 5);
   if (!matched.length)
     return {
       layers: [],
@@ -581,11 +597,36 @@ function mapColors(originalColors: string[], colors: string[]): Record<string,st
   }
   return result;
 }
+export const palettePresets: Record<string, PaletteGroups> = {
+  lilac: { background: ["#D7CDF5", "#AA9BF0", "#7864D7", "#181817"], objects: ["#F9ECB0", "#F9A3AA", "#FFE3E1", "#FFFFFF"] },
+  sand: { background: ["#FDD7B9", "#FAC896", "#D27532", "#181817"], objects: ["#F9ECB0", "#80DADA", "#BEEBEB", "#FFFFFF"] },
+  mint: { background: ["#BEEBEB", "#80DADA", "#5ABEBE", "#181817"], objects: ["#FFD4F2", "#6D7BFC", "#B6C6FE", "#FFFFFF"] },
+};
+function groupedColorMap(assets: Asset[], palette: PaletteGroups, role: AssetRole): Map<string, string> {
+  const colors = [...new Set(assets.filter(a => a.role === role).flatMap(a => a.colors))].sort();
+  const allowed = role === "background" ? palette.background : [...new Set([...palette.objects, ...palette.background])];
+  const result = new Map(Object.entries(mapColors(colors, allowed)));
+  const canonical = palettePresets.lilac;
+  for (const color of colors) {
+    const normalized = normalizeColor(color)!;
+    for (const group of ["background", "objects"] as const) {
+      const index = canonical[group].findIndex(c => c.toLowerCase() === normalized);
+      if (index < 0 || normalized === "#181817") continue;
+      const target = role === "background" ? palette.background : palette[group];
+      result.set(color, target[index % target.length]);
+    }
+  }
+  return result;
+}
 export function composeSvg(scene: Scene, assets: Asset[]): string {
   canvas(scene.width, scene.height);
   if (scene.detail !== undefined && scene.detail !== "S" && scene.detail !== "L") fail("Неверная детализация проекта.");
   const palette = scene.palette === undefined ? undefined : validatePaletteGroups(scene.palette);
   for (const a of assets) assetMetadata(a,a.name);
+  const roleMaps = palette ? {
+    main: groupedColorMap(assets, palette, "main"),
+    background: groupedColorMap(assets, palette, "background"),
+  } : undefined;
   const doc = document.implementation.createDocument(NS, "svg", null);
   const root = doc.documentElement;
   root.setAttribute("width", String(scene.width));
@@ -621,7 +662,7 @@ export function composeSvg(scene: Scene, assets: Asset[]): string {
     const metadata = assetMetadata(asset,asset.name);
     if (scene.detail && metadata.detail !== scene.detail) fail("Слои должны соответствовать выбранной детализации.");
     if (!layer.visible) continue;
-    const layerMapping = palette ? new Map(Object.entries(mapColors(asset.colors, metadata.role === "background" ? palette.background : [...new Set([...palette.objects,...palette.background])]))) : metadata.role === "background" ? new Map<string,string>() : mapping;
+    const layerMapping = roleMaps ? roleMaps[metadata.role] : metadata.role === "background" ? new Map<string,string>() : mapping;
     const info = inspect(asset.svg);
     if (
       !Number.isFinite(asset.width) ||

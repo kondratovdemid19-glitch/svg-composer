@@ -406,3 +406,52 @@ describe('detail switch atomicity across layers',()=>{
   const original=JSON.stringify(scene);expect(()=>switchDetail(scene,[l,small,missing],'S')).toThrow(/Cloud/);expect(JSON.stringify(scene)).toBe(original);
  });
 });
+
+describe('composition with paired source roles', () => {
+  it('prefers one main object per family instead of filling the five slots with background duplicates', async () => {
+    const assets = [];
+    for (const [i, family] of ['Кошелек','Монета','Телефон'].entries()) {
+      for (const [j, role] of ['background','main'].entries()) {
+        assets.push(await readAsset(`<svg viewBox="0 0 100 80"><path d="M${i*2+j} 0L20 20"/></svg>`, `${family}--L--${role}.svg`));
+      }
+    }
+    const plan = planComposition(assets, 'Кошелек монета телефон', 'objects', 1200, 800);
+    expect(plan.matches).toEqual(['Кошелек--L--main.svg','Монета--L--main.svg','Телефон--L--main.svg']);
+  });
+  it('can still use a background-only family without dropping requested objects', async () => {
+    const background = await readAsset('<svg viewBox="0 0 100 80"><path d="M1 0L20 20"/></svg>', 'Облако--L--background.svg');
+    const plan = planComposition([background], 'Облако', 'objects', 1200, 800);
+    expect(plan.matches).toEqual(['Облако--L--background.svg']);
+  });
+});
+
+describe('source palette fidelity across objects', () => {
+  const sceneFor = (assets: Awaited<ReturnType<typeof readAsset>>[], palette: any): Scene => ({width:1200,height:800,title:'Palette',detail:'L',colorMap:{},palette,layers:assets.map((a,i)=>({id:`palette-${i}`,assetId:a.id,x:200+i*250,y:300,scale:1,rotation:0,visible:true,locked:false}))});
+  const lilac = {background:['#D7CDF5','#AA9BF0','#7864D7','#181817'],objects:['#F9ECB0','#F9A3AA','#FFE3E1','#FFFFFF']};
+  const sand = {background:['#FDD7B9','#FAC896','#D27532','#181817'],objects:['#F9ECB0','#80DADA','#BEEBEB','#FFFFFF']};
+  it('keeps every source swatch when applying the source lilac scheme', async () => {
+    const colors = ['#FFFFFF','#F9A3AA','#7864D7','#F9ECB0','#D7CDF5','#181817','#FFE3E1','#AA9BF0'];
+    const a=await readAsset(`<svg viewBox="0 0 100 100">${colors.map((c,i)=>`<path d="M${i} 0L20 20" fill="${c}"/>`).join('')}</svg>`, 'Book--L--main.svg');
+    const out=parse(composeSvg(sceneFor([a],lilac),[a]));
+    expect([...out.querySelectorAll('path')].map(p=>p.getAttribute('fill')?.toLowerCase())).toEqual(colors.map(c=>c.toLowerCase()));
+  });
+  it('maps common source paints consistently and keeps paper white in a different preset', async () => {
+    const a=await readAsset('<svg viewBox="0 0 100 100"><path d="M1 0L20 20" fill="#F9A3AA"/><path d="M2 0L20 20" fill="white"/></svg>','Book--L--main.svg');
+    const b=await readAsset('<svg viewBox="0 0 100 100"><path d="M3 0L20 20" fill="white"/><path d="M4 0L20 20" fill="#F9A3AA"/></svg>','Wallet--L--main.svg');
+    const out=parse(composeSvg(sceneFor([a,b],sand),[a,b]));
+    expect([...out.querySelectorAll('path')].map(p=>p.getAttribute('fill')?.toLowerCase())).toEqual(['#80dada','#ffffff','#ffffff','#80dada']);
+  });
+  it('uses a common deterministic mapping for custom source colors', async () => {
+    const a=await readAsset('<svg viewBox="0 0 100 100"><path d="M1 0L20 20" fill="#123456"/><path d="M2 0L20 20" fill="#345678"/></svg>','One--L--main.svg');
+    const b=await readAsset('<svg viewBox="0 0 100 100"><path d="M3 0L20 20" fill="#345678"/><path d="M4 0L20 20" fill="#123456"/></svg>','Two--L--main.svg');
+    const out=parse(composeSvg(sceneFor([a,b],sand),[a,b]));
+    const fills=[...out.querySelectorAll('path')].map(p=>p.getAttribute('fill'));
+    expect(fills[0]).toBe(fills[3]);expect(fills[1]).toBe(fills[2]);
+  });
+});
+
+it('matches the supplied book and headphones families to a learning headline', async () => {
+ const book=await readAsset('<svg viewBox="0 0 100 100"><path d="M1 0L20 20"/></svg>','Книга--L--main.svg');
+ const headphones=await readAsset('<svg viewBox="0 0 100 100"><path d="M2 0L20 20"/></svg>','Наушники--L--main.svg');
+ expect(planComposition([book,headphones],'Новые знания каждый день','meaning',1200,800).matches).toEqual([book.name,headphones.name]);
+});
