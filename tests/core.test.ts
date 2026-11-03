@@ -359,3 +359,21 @@ describe('review: recoloring preserves visibility', () => {
  });
  it('rejects unsafe layer identifiers at the core boundary',async()=>{const a=await readAsset('<svg viewBox="0 0 10 10"/>','x');const scene=sceneFor(a,{});scene.layers[0].id='"><img src="x" onerror="alert(1)">';expect(()=>composeSvg(scene,[a])).toThrow();});
 });
+
+describe('review: inherited structural paint dependencies', () => {
+  it.each(['svg', 'g'])('protects gradients referenced by an inherited %s paint without freezing unrelated siblings', async (ancestor) => {
+    const definitions = '<defs><linearGradient id="base"><stop stop-color="#ffffff"/></linearGradient><linearGradient id="maskPaint" href="#base"/><linearGradient id="artPaint"><stop stop-color="#ff0000"/></linearGradient></defs>';
+    const content = '<mask id="m"><rect width="30" height="30"/></mask><path d="M0 0L20 20" fill="url(#artPaint)" mask="url(#m)"/>';
+    const source = ancestor === 'svg'
+      ? `<svg viewBox="0 0 30 30" fill="url(#maskPaint)">${definitions}${content}</svg>`
+      : `<svg viewBox="0 0 30 30">${definitions}<g fill="url(#maskPaint)">${content}</g></svg>`;
+    const asset = await readAsset(source, 'inherited-mask.svg');
+    expect(asset.colors).not.toContain('#ffffff');
+    expect(asset.colors).toContain('#ff0000');
+    const out = parse(composeSvg({width:400,height:400,title:'',colorMap:{'#ffffff':'#000000','#ff0000':'#00ff00'},layers:[{id:'layer',assetId:asset.id,x:200,y:200,scale:1,rotation:0,visible:true,locked:false}]},[asset]));
+    expect(out.querySelector('[id="layer0-base"] stop')?.getAttribute('stop-color')).toBe('#ffffff');
+    expect(out.querySelector('[id="layer0-maskPaint"]')?.getAttribute('href')).toBe('#layer0-base');
+    expect(out.querySelector('[id="layer0-artPaint"] stop')?.getAttribute('stop-color')).toBe('#00ff00');
+    expect(out.querySelector('path')?.getAttribute('d')).toBe('M0 0L20 20');
+  });
+});

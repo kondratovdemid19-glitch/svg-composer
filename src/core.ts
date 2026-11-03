@@ -33,25 +33,36 @@ const internalURL = /^url\(\s*(['"]?)#([A-Za-z_][\w.:-]*)\1\s*\)$/;
 // inherited paint context. Shared references are conservatively protected too.
 function protectedPaint(root: Element): Set<Element> {
   const all = [root, ...Array.from(root.querySelectorAll("*"))];
-  const byId = new Map(all.filter(el => el.hasAttribute("id")).map(el => [el.getAttribute("id")!, el]));
+  const byId = new Map(
+    all.filter(el => el.hasAttribute("id")).map(el => [el.getAttribute("id")!, el]),
+  );
   const protectedElements = new Set<Element>();
-  const queue = all.filter(el => ["mask", "filter", "clipPath"].includes(el.localName));
+  const expandedSubtrees = new Set<Element>();
+  const queue = all
+    .filter(el => ["mask", "filter", "clipPath"].includes(el.localName))
+    .map(element => ({ element, subtree: true }));
   for (let index = 0; index < queue.length; index++) {
-    const el = queue[index];
-    if (protectedElements.has(el)) continue;
-    protectedElements.add(el);
-    queue.push(...Array.from(el.children));
-    for (const attr of Array.from(el.attributes)) {
-      const reference = attr.localName === "href" ? attr.value.slice(1) : attr.value.match(internalURL)?.[2];
-      const target = reference && byId.get(reference);
-      if (target) queue.push(target);
+    const { element, subtree } = queue[index];
+    // A context-only ancestor may later be reached through a real reference.
+    // Keep attribute traversal and subtree expansion as separate visited states.
+    if (subtree && !expandedSubtrees.has(element)) {
+      expandedSubtrees.add(element);
+      queue.push(...Array.from(element.children).map(child => ({ element: child, subtree: true })));
     }
-  }
-  // Freezing ancestor attributes retains inherited currentColor/fill without
-  // materializing paint onto <use> targets, which would change shadow inheritance.
-  for (const el of [...protectedElements]) {
-    let parent = el.parentElement;
-    while (parent) { protectedElements.add(parent); parent = parent.parentElement; }
+    if (protectedElements.has(element)) continue;
+    protectedElements.add(element);
+    // Follow inherited paint dependencies too, without expanding ancestors into
+    // unrelated sibling artwork. This preserves SVG/use inheritance unchanged.
+    if (element.parentElement) {
+      queue.push({ element: element.parentElement, subtree: false });
+    }
+    for (const attr of Array.from(element.attributes)) {
+      const reference = attr.localName === "href"
+        ? attr.value.slice(1)
+        : attr.value.match(internalURL)?.[2];
+      const target = reference && byId.get(reference);
+      if (target) queue.push({ element: target, subtree: true });
+    }
   }
   return protectedElements;
 }
